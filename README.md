@@ -1,15 +1,47 @@
-# AWS EC2 Instance Store 自動掛載腳本 (V4)
+# AWS EC2 Instance Store 自動掛載腳本 (Basic 版)
 
 簡單易用的 Instance Store 自動掛載解決方案。
 
-## 版本說明
+---
 
-這是 **V4 版本**，特點是：
+## 版本選擇指南
+
+本專案提供兩個版本分支，請依據您的需求選擇：
+
+| 分支 | 適用場景 | 特點 |
+|------|----------|------|
+| **`basic`** (目前) | 簡單部署、單一 Instance Store | 單檔腳本、易於理解、郵件通知 |
+| **[`advanced`](../../tree/advanced)** | 生產環境、多磁碟 RAID | 模組化設計、外部配置檔、完整功能 |
+| **[`main`](../../tree/main)** | 與 `advanced` 相同 | 預設分支 |
+
+### 功能比較表
+
+| 功能 | `basic` | `advanced` |
+|------|:-------:|:----------:|
+| 自動偵測 Instance Store | ✅ | ✅ |
+| 動態/靜態掛載點 | ✅ | ✅ |
+| IMDSv2 支援 | ✅ | ✅ |
+| 郵件通知 | ✅ | ✅ |
+| RAID 0 支援 | ❌ | ✅ |
+| XFS 檔案系統 | ❌ | ✅ |
+| 外部配置檔 | ❌ | ✅ |
+| 命令列參數 | ❌ | ✅ |
+| systemd 服務 | ❌ | ✅ |
+| 安裝/解除安裝腳本 | ❌ | ✅ |
+| Cloud-init 範例 | ❌ | ✅ |
+| Terraform 範例 | ❌ | ✅ |
+| 程式碼註解 | 繁體中文 | 繁體中文 |
+
+---
+
+## Basic 版本說明
+
+這是 **Basic 版本**，特點是：
 - 單一檔案，簡單直觀
 - 約 450 行（含詳細繁體中文註解）
 - 適合快速部署和學習
 
-> 如需更完整的功能（RAID 0、XFS、模組化配置），請使用 [V5 版本](https://github.com/albertyu-0703/Mounting-AWS-Instance-Store-on-Boot/tree/v5)
+> 如需更完整的功能（RAID 0、XFS、模組化配置），請使用 [advanced 分支](../../tree/advanced)
 
 ## 功能
 
@@ -43,7 +75,7 @@ sudo yum install -y sendmail  # 或 apt install sendmail
 
 ```bash
 # 1. 下載腳本
-curl -O https://raw.githubusercontent.com/albertyu-0703/Mounting-AWS-Instance-Store-on-Boot/v4/InstanceStore.sh
+curl -O https://raw.githubusercontent.com/albertyu-0703/Mounting-AWS-Instance-Store-on-Boot/basic/InstanceStore.sh
 
 # 2. 給予執行權限
 chmod +x InstanceStore.sh
@@ -175,18 +207,6 @@ lsblk -f
 這是正常的！Instance Store 是暫時性儲存：
 - 實例停止 (Stop) 時資料會遺失
 - 實例重開機 (Reboot) 時資料保留，但需重新掛載
-
-## 版本比較
-
-| 功能 | V4 | V5 |
-|------|:--:|:--:|
-| 基本掛載 | ✅ | ✅ |
-| RAID 0 | ❌ | ✅ |
-| XFS 支援 | ❌ | ✅ |
-| 外部配置檔 | ❌ | ✅ |
-| 命令列參數 | ❌ | ✅ |
-| 複雜度 | 低 | 中 |
-| 適合場景 | 簡單部署、學習 | 生產環境 |
 
 ## 作者
 
