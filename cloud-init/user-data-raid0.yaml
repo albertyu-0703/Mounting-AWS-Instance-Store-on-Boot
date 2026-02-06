@@ -1,0 +1,93 @@
+#cloud-config
+# ============================================================
+# AWS EC2 Instance Store RAID 0 配置
+# ============================================================
+# 此配置會將所有 Instance Store 組成 RAID 0 陣列
+# 適用於需要最大 I/O 效能的工作負載
+# ============================================================
+
+package_update: true
+
+packages:
+  - mdadm
+  - nvme-cli
+
+write_files:
+  - path: /usr/local/bin/mount-instance-store
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOG="/var/log/instance-store-mount.log"
+      RAID_DEV="/dev/md0"
+      MOUNT_PT="/mnt/instance_store"
+      FS_TYPE="xfs"
+
+      log() { echo "$(date '+%F %T') $1" | tee -a "$LOG"; }
+
+      [[ "$EUID" -ne 0 ]] && { log "ERROR: Need root"; exit 1; }
+
+      log "INFO: Detecting Instance Store devices..."
+
+      # 偵測 NVMe Instance Store
+      DEVS=()
+      for d in /dev/nvme*n1; do
+          [[ ! -b "$d" ]] && continue
+          name=$(basename "$d")
+          model=$(cat "/sys/block/$name/device/model" 2>/dev/null | tr -d ' ')
+          [[ "$model" != "AmazonElasticBlockStore" ]] && DEVS+=("$d")
+      done
+
+      COUNT=${#DEVS[@]}
+      log "INFO: Found $COUNT Instance Store device(s)"
+
+      [[ $COUNT -eq 0 ]] && { log "WARN: No Instance Store"; exit 0; }
+
+      # 停止現有 RAID
+      mdadm --stop "$RAID_DEV" 2>/dev/null || true
+      for d in "${DEVS[@]}"; do
+          mdadm --zero-superblock "$d" 2>/dev/null || true
+          wipefs -a "$d" 2>/dev/null || true
+      done
+
+      # 建立 RAID 0
+      log "INFO: Creating RAID 0 with $COUNT devices..."
+      yes | mdadm --create "$RAID_DEV" \
+          --level=0 \
+          --raid-devices=$COUNT \
+          --chunk=256 \
+          "${DEVS[@]}"
+
+      # 格式化
+      log "INFO: Formatting with $FS_TYPE..."
+      mkfs.$FS_TYPE -f -K "$RAID_DEV"
+
+      # 掛載
+      mkdir -p "$MOUNT_PT"
+      mount -o defaults,noatime,nodiratime "$RAID_DEV" "$MOUNT_PT"
+      chmod 1777 "$MOUNT_PT"
+
+      log "INFO: RAID 0 mounted at $MOUNT_PT"
+      df -h "$MOUNT_PT" | tee -a "$LOG"
+      mdadm --detail "$RAID_DEV" >> "$LOG"
+
+  - path: /etc/systemd/system/instance-store-mount.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Mount Instance Store RAID 0
+      After=local-fs.target
+      Before=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/mount-instance-store
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable --now instance-store-mount.service

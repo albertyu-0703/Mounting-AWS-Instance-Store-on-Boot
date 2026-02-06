@@ -1,0 +1,25 @@
+[Unit]
+Description=Mount AWS EC2 Instance Store
+Documentation=https://github.com/your-repo/Mounting-AWS-Instance-Store-on-Boot
+After=local-fs.target network-online.target
+Before=docker.service containerd.service kubelet.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mount-instance-store
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+# 重試設定
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+StartLimitInterval=60
+
+# 超時設定
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

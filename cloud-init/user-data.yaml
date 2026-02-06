@@ -1,0 +1,121 @@
+#cloud-config
+# ============================================================
+# AWS EC2 Instance Store 自動掛載 - Cloud-init 配置
+# ============================================================
+# 使用方式:
+# 1. 在 EC2 Launch Template 或 User Data 中使用此配置
+# 2. 或將內容貼到 EC2 控制台的 User Data 欄位
+# ============================================================
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - mdadm
+  - nvme-cli
+  - curl
+
+write_files:
+  # 掛載腳本
+  - path: /usr/local/bin/mount-instance-store
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # AWS Instance Store Auto-Mount Script (Simplified for cloud-init)
+      set -euo pipefail
+
+      LOG_FILE="/var/log/instance-store-mount.log"
+      MOUNT_MODE="${MOUNT_MODE:-single}"
+      FILESYSTEM_TYPE="${FILESYSTEM_TYPE:-ext4}"
+
+      log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"; }
+
+      # 檢查 root 權限
+      [[ "$EUID" -ne 0 ]] && { log "ERROR: Please run as root"; exit 1; }
+
+      log "INFO: Starting Instance Store mount script..."
+
+      # 偵測 Instance Store 裝置
+      mapfile -t DEVICES < <(lsblk -d -o NAME,MODEL 2>/dev/null | grep -i "Instance Storage" | awk '{print $1}')
+
+      if [[ ${#DEVICES[@]} -eq 0 ]]; then
+          # 嘗試透過排除 EBS 來偵測
+          for dev in /dev/nvme*n1; do
+              [[ ! -b "$dev" ]] && continue
+              dev_name=$(basename "$dev")
+              model=$(cat "/sys/block/$dev_name/device/model" 2>/dev/null | tr -d ' ')
+              [[ "$model" != "AmazonElasticBlockStore" ]] && DEVICES+=("$dev_name")
+          done
+      fi
+
+      log "INFO: Found ${#DEVICES[@]} Instance Store device(s)"
+
+      [[ ${#DEVICES[@]} -eq 0 ]] && { log "WARN: No Instance Store found"; exit 0; }
+
+      # 掛載邏輯
+      if [[ "$MOUNT_MODE" == "raid0" ]] && [[ ${#DEVICES[@]} -gt 1 ]]; then
+          RAID_DEVICE="/dev/md0"
+          MOUNT_POINT="/mnt/instance_store"
+
+          # 清除現有 RAID
+          mdadm --stop "$RAID_DEVICE" 2>/dev/null || true
+          for dev in "${DEVICES[@]}"; do
+              mdadm --zero-superblock "/dev/$dev" 2>/dev/null || true
+          done
+
+          # 建立 RAID 0
+          device_paths=()
+          for dev in "${DEVICES[@]}"; do device_paths+=("/dev/$dev"); done
+          yes | mdadm --create "$RAID_DEVICE" --level=0 --raid-devices=${#DEVICES[@]} "${device_paths[@]}"
+
+          mkfs.$FILESYSTEM_TYPE -F "$RAID_DEVICE"
+          mkdir -p "$MOUNT_POINT"
+          mount -o defaults,noatime "$RAID_DEVICE" "$MOUNT_POINT"
+          chmod 1777 "$MOUNT_POINT"
+          log "INFO: RAID 0 mounted at $MOUNT_POINT"
+      else
+          idx=1
+          for dev in "${DEVICES[@]}"; do
+              MOUNT_POINT="/mnt/instance_store$idx"
+              DEVICE="/dev/$dev"
+
+              mkdir -p "$MOUNT_POINT"
+              mkfs.$FILESYSTEM_TYPE -F "$DEVICE" 2>/dev/null || true
+              mount -o defaults,noatime "$DEVICE" "$MOUNT_POINT"
+              chmod 1777 "$MOUNT_POINT"
+              log "INFO: Mounted $DEVICE at $MOUNT_POINT"
+              ((idx++))
+          done
+      fi
+
+      log "INFO: Instance Store mount completed"
+      df -h | grep instance_store | tee -a "$LOG_FILE"
+
+  # Systemd 服務檔案
+  - path: /etc/systemd/system/instance-store-mount.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Mount AWS EC2 Instance Store
+      After=local-fs.target
+      Before=docker.service containerd.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/mount-instance-store
+      RemainAfterExit=yes
+      Environment="MOUNT_MODE=single"
+      Environment="FILESYSTEM_TYPE=ext4"
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # 重新載入 systemd
+  - systemctl daemon-reload
+  # 啟用服務
+  - systemctl enable instance-store-mount.service
+  # 立即執行掛載
+  - systemctl start instance-store-mount.service
+
+final_message: "Instance Store mount configuration completed after $UPTIME seconds"
