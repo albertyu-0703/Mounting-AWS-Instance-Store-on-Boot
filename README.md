@@ -1,47 +1,197 @@
-# EC2 Instance Storage Mount Script
+# AWS EC2 Instance Store 自動掛載腳本 (V4)
 
-這個 Bash 腳本用於自動掛載 Amazon EC2 Instance 的 Instance Storage，並將腳本的運行日誌記錄到指定的日誌文件中。此外，腳本會在掛載完成後向指定的收件人發送執行日誌。
+簡單易用的 Instance Store 自動掛載解決方案。
+
+## 版本說明
+
+這是 **V4 版本**，特點是：
+- 單一檔案，簡單直觀
+- 約 450 行（含詳細繁體中文註解）
+- 適合快速部署和學習
+
+> 如需更完整的功能（RAID 0、XFS、模組化配置），請使用 [V5 版本](https://github.com/albertyu-0703/Mounting-AWS-Instance-Store-on-Boot/tree/v5)
 
 ## 功能
 
-- 驗證腳本是否以 root 權限運行。
-- 從 EC2 Instance Metadata Service (IMDS) 獲取實例的元數據。
-- 檢測並掛載可用的 Instance Storage。
-- 如果掛載失敗，腳本將終止執行。
-- 將腳本的啟動和結束時間記錄到日誌文件。
-- 創建臨時郵件文件並通過 SMTP 服務發送執行日誌。
+- 自動偵測 Instance Store NVMe 裝置
+- 自動格式化為 ext4 檔案系統
+- 自動掛載到指定目錄
+- IMDSv2 支援
+- 執行日誌記錄
+- 郵件通知（選用）
 
-## 前提條件
+## 系統需求
 
-- 需要有 root 權限。
-- 系統需安裝 `curl` 和 `sendmail` 工具。
-- 必須在 EC2 實例上執行此腳本。
+- **作業系統**: Amazon Linux 2/2023、Ubuntu、Debian、RHEL、CentOS
+- **權限**: 需要 root 權限
+- **EC2 類型**: 必須支援 Instance Store（如 c5d、i3、d2 等）
 
-## 安裝與配置
-
-1. 將腳本文件下載到您的 EC2 實例。
-2. 確保腳本文件 (`mount_nvme.sh`) 具有可執行權限：
-    
-```bash
-chmod +x mount_nvme.sh
-````
-
-## 使用方法
-
-要運行腳本，使用以下命令：
+### 必要套件
 
 ```bash
-sudo ./mount_nvme.sh
-````
+# Amazon Linux
+sudo yum install -y curl util-linux e2fsprogs
 
-## **`lsblk`** 的常用指令及參數
+# Ubuntu/Debian
+sudo apt install -y curl util-linux e2fsprogs
 
-1. **`lsblk`**：無參數時，顯示所有塊設備的列表。
-2. **`lsblk -a`**：列出所有的塊設備，包括空的設備。
-3. **`lsblk -f`**：列出所有塊設備，並且顯示文件系統的類型。
-4. **`lsblk -l`**：以列表格式顯示塊設備。
-5. **`lsblk -m`**：顯示塊設備的擁有者和權限信息。
-6. **`lsblk -p`**：顯示設備的完整路徑名。
-7. **`lsblk -s`**：顯示每個塊設備的大小。
-8. **`lsblk -o NAME,SIZE,FSTYPE,TYPE,MOUNTPOINT`**：自定義列的輸出。在這個例子中，它顯示了設備名稱、大小、文件系統類型、設備類型和掛載點。
-9. **`lsblk /dev/sda`**：顯示特定設備的信息，如 **`/dev/sda`**。
+# 如需郵件通知功能
+sudo yum install -y sendmail  # 或 apt install sendmail
+```
+
+## 快速開始
+
+```bash
+# 1. 下載腳本
+curl -O https://raw.githubusercontent.com/albertyu-0703/Mounting-AWS-Instance-Store-on-Boot/v4/InstanceStore.sh
+
+# 2. 給予執行權限
+chmod +x InstanceStore.sh
+
+# 3. 執行（需要 root 權限）
+sudo ./InstanceStore.sh
+
+# 4. 確認掛載結果
+df -h | grep instance_store
+```
+
+## 設定修改
+
+編輯 `InstanceStore.sh`，找到以下區塊進行修改：
+
+### 掛載點設定（第 249 行）
+
+```bash
+# 修改這個陣列來設定掛載點
+MOUNT_POINTS=("/mnt/instance_store1" "/mnt/instance_store2" "/mnt/instance_store3")
+```
+
+### 郵件通知設定（第 397-420 行）
+
+```bash
+# 收件者
+RECIPIENTS=("your-email@example.com")
+
+# 寄件者和 SMTP 設定
+sendmail -f "sender@example.com" -S "email-smtp.us-east-1.amazonaws.com:587" \
+         -au "Your-SMTP-User-Name" -ap "Your-SMTP-Password" \
+         "$email" < "$TEMP_MAIL_FILE"
+```
+
+## 開機自動執行
+
+### 方法 1: Cron（建議）
+
+```bash
+sudo crontab -e
+# 添加以下行：
+@reboot /usr/local/bin/InstanceStore.sh
+```
+
+### 方法 2: Systemd
+
+建立 `/etc/systemd/system/instance-store.service`：
+
+```ini
+[Unit]
+Description=Mount Instance Store
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/InstanceStore.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+啟用服務：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable instance-store.service
+```
+
+## 日誌查看
+
+```bash
+# 查看日誌
+cat /var/log/nvme_mount.log
+
+# 即時追蹤日誌
+tail -f /var/log/nvme_mount.log
+```
+
+## 程式碼結構說明
+
+腳本分為以下區塊（詳細註解請見腳本內容）：
+
+| 區塊 | 說明 |
+|------|------|
+| 區塊一 | 全域變數設定 |
+| 區塊二 | 函數定義 (log) |
+| 區塊三 | 腳本開始執行 |
+| 區塊四 | 權限檢查 |
+| 區塊五 | 取得 EC2 Metadata |
+| 區塊六 | 偵測 Instance Store |
+| 區塊七 | 解除現有掛載 |
+| 區塊八 | 設定掛載點 |
+| 區塊九 | 主要掛載邏輯 |
+| 區塊十 | 腳本結束 |
+| 區塊十一 | 呼叫其他腳本（選用） |
+| 區塊十二 | 郵件通知功能 |
+
+## lsblk 常用指令參考
+
+```bash
+# 查看所有區塊裝置
+lsblk
+
+# 查看詳細資訊（含型號）
+lsblk -o NAME,SIZE,FSTYPE,TYPE,MOUNTPOINT,MODEL
+
+# 只看 Instance Store
+lsblk -o NAME,MODEL | grep "Instance Storage"
+
+# 查看檔案系統類型
+lsblk -f
+```
+
+## 常見問題
+
+### Q: 沒有偵測到 Instance Store？
+
+1. 確認 EC2 類型支援 Instance Store（如 c5d、i3、d2 等）
+2. 執行 `lsblk -o NAME,MODEL` 確認裝置
+
+### Q: 掛載失敗？
+
+1. 確認以 root 執行：`sudo ./InstanceStore.sh`
+2. 檢查日誌：`cat /var/log/nvme_mount.log`
+
+### Q: 重開機後資料消失？
+
+這是正常的！Instance Store 是暫時性儲存：
+- 實例停止 (Stop) 時資料會遺失
+- 實例重開機 (Reboot) 時資料保留，但需重新掛載
+
+## 版本比較
+
+| 功能 | V4 | V5 |
+|------|:--:|:--:|
+| 基本掛載 | ✅ | ✅ |
+| RAID 0 | ❌ | ✅ |
+| XFS 支援 | ❌ | ✅ |
+| 外部配置檔 | ❌ | ✅ |
+| 命令列參數 | ❌ | ✅ |
+| 複雜度 | 低 | 中 |
+| 適合場景 | 簡單部署、學習 | 生產環境 |
+
+## 作者
+
+Albert Yu
+
+## 授權
+
+詳見 [LICENSE.md](LICENSE.md)
