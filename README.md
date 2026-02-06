@@ -2,6 +2,146 @@
 
 自動偵測並掛載 Amazon EC2 Instance Store (NVMe SSD) 的解決方案。
 
+## 支援的作業系統
+
+本腳本支援以下 Linux 發行版：
+
+| 作業系統 | 版本 | 套件管理器 | 測試狀態 |
+|----------|------|------------|----------|
+| Amazon Linux | 2, 2023 | yum / dnf | ✅ 完整支援 |
+| Ubuntu | 20.04, 22.04, 24.04 | apt | ✅ 完整支援 |
+| Debian | 10, 11, 12 | apt | ✅ 完整支援 |
+| RHEL | 7, 8, 9 | yum / dnf | ✅ 完整支援 |
+| CentOS | 7, 8 Stream | yum / dnf | ✅ 完整支援 |
+| Rocky Linux | 8, 9 | dnf | ✅ 完整支援 |
+| Fedora | 38+ | dnf | ⚠️ 應可運作 |
+
+> **注意**: 本腳本僅支援 Linux 作業系統，不支援 Windows。
+
+## 系統需求與前置條件
+
+### 必要條件
+
+- **Root 權限**: 腳本需要 root 權限執行掛載操作
+- **Bash 4.0+**: 腳本使用 bash 陣列功能，需要 bash 4.0 以上版本
+- **EC2 環境**: 必須在 AWS EC2 實例上執行
+- **Instance Store**: EC2 實例類型必須支援 Instance Store (如 c5d, i3, d2 等)
+
+### 必要套件
+
+| 套件 | 用途 | 必要性 |
+|------|------|--------|
+| `curl` | 取得 EC2 Metadata | 必要 |
+| `util-linux` | lsblk, blkid, mount 等工具 | 必要 |
+| `e2fsprogs` | ext4 檔案系統工具 (mkfs.ext4) | 使用 ext4 時必要 |
+| `xfsprogs` | XFS 檔案系統工具 (mkfs.xfs) | 使用 XFS 時必要 |
+| `mdadm` | RAID 管理工具 | 使用 RAID 0 模式時必要 |
+| `nvme-cli` | NVMe 裝置管理工具 | 建議安裝 |
+
+### 各作業系統安裝依賴
+
+#### Amazon Linux 2 / Amazon Linux 2023
+
+```bash
+# Amazon Linux 2
+sudo yum install -y mdadm nvme-cli curl util-linux e2fsprogs xfsprogs
+
+# Amazon Linux 2023
+sudo dnf install -y mdadm nvme-cli curl util-linux e2fsprogs xfsprogs
+```
+
+#### Ubuntu / Debian
+
+```bash
+sudo apt update
+sudo apt install -y mdadm nvme-cli curl util-linux e2fsprogs xfsprogs
+```
+
+#### RHEL / CentOS / Rocky Linux
+
+```bash
+# RHEL 7 / CentOS 7
+sudo yum install -y mdadm nvme-cli curl util-linux e2fsprogs xfsprogs
+
+# RHEL 8+ / CentOS 8 Stream / Rocky Linux
+sudo dnf install -y mdadm nvme-cli curl util-linux e2fsprogs xfsprogs
+```
+
+### 作業系統差異說明
+
+#### 1. 套件管理器差異
+
+| 發行版系列 | 套件管理器 | 安裝指令 |
+|------------|------------|----------|
+| Amazon Linux 2, RHEL 7, CentOS 7 | yum | `sudo yum install -y <package>` |
+| Amazon Linux 2023, RHEL 8+, Rocky, Fedora | dnf | `sudo dnf install -y <package>` |
+| Ubuntu, Debian | apt | `sudo apt install -y <package>` |
+
+#### 2. 服務管理差異
+
+所有支援的作業系統都使用 **systemd** 作為服務管理器：
+
+```bash
+# 啟用開機自動執行
+sudo systemctl enable instance-store-mount.service
+
+# 手動啟動服務
+sudo systemctl start instance-store-mount.service
+
+# 查看服務狀態
+sudo systemctl status instance-store-mount.service
+```
+
+#### 3. NVMe 裝置命名
+
+在所有支援的作業系統中，NVMe Instance Store 裝置名稱格式一致：
+
+- **Instance Store**: `/dev/nvme1n1`, `/dev/nvme2n1`, ...
+- **EBS (根磁碟)**: 通常為 `/dev/nvme0n1`
+
+#### 4. 預設 Shell 差異
+
+| 發行版 | 預設 Shell | 注意事項 |
+|--------|------------|----------|
+| Amazon Linux | bash | 無需調整 |
+| Ubuntu | dash (sh), bash (login) | 腳本指定使用 bash |
+| Debian | dash (sh), bash (login) | 腳本指定使用 bash |
+| RHEL/CentOS | bash | 無需調整 |
+
+> 本腳本在 shebang 中明確指定 `#!/bin/bash`，因此不受預設 shell 影響。
+
+#### 5. SELinux 考量 (RHEL/CentOS)
+
+在啟用 SELinux 的系統上，掛載點可能需要正確的安全上下文：
+
+```bash
+# 查看 SELinux 狀態
+getenforce
+
+# 如果遇到權限問題，可以設定掛載點的安全上下文
+sudo chcon -R -t tmp_t /mnt/instance_store1
+```
+
+### 驗證系統環境
+
+執行以下指令驗證系統是否符合需求：
+
+```bash
+# 檢查 bash 版本 (需要 4.0+)
+bash --version
+
+# 檢查是否在 EC2 環境
+curl -s --connect-timeout 2 http://169.254.169.254/latest/meta-data/instance-id && echo " - EC2 環境確認"
+
+# 檢查是否有 Instance Store
+lsblk -o NAME,MODEL | grep -i "Instance Storage"
+
+# 檢查必要工具
+for cmd in curl lsblk blkid mount mkfs.ext4; do
+    command -v $cmd &>/dev/null && echo "✓ $cmd" || echo "✗ $cmd (缺少)"
+done
+```
+
 ## 功能特點
 
 - **自動偵測** - 自動識別所有 Instance Store NVMe 裝置
@@ -187,7 +327,8 @@ Mounting-AWS-Instance-Store-on-Boot/
 ├── terraform/
 │   └── main.tf                    # Terraform 範例
 └── docs/
-    └── instance-store-types.md    # Instance Store 類型參考
+    ├── instance-store-types.md    # Instance Store 類型參考
+    └── os-compatibility.md        # 作業系統相容性指南
 ```
 
 ## 常用指令參考
