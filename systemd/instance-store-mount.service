@@ -1,6 +1,6 @@
 [Unit]
 Description=Mount AWS EC2 Instance Store
-Documentation=https://github.com/your-repo/Mounting-AWS-Instance-Store-on-Boot
+Documentation=https://github.com/albertyu-0703/Mounting-AWS-Instance-Store-on-Boot
 After=local-fs.target network-online.target
 Before=docker.service containerd.service kubelet.service
 Wants=network-online.target
