@@ -2,6 +2,73 @@
 
 自動偵測並掛載 Amazon EC2 Instance Store (NVMe SSD) 的解決方案。
 
+---
+
+## 版本選擇指南
+
+本專案提供兩個版本分支，請依據您的需求選擇：
+
+| 分支 | 適用場景 | 特點 |
+|------|----------|------|
+| **[`basic`](../../tree/basic)** | 簡單部署、單一 Instance Store | 單檔腳本、易於理解、郵件通知 |
+| **[`advanced`](../../tree/advanced)** | 生產環境、多磁碟 RAID | 模組化設計、外部配置檔、完整功能 |
+| **`main`** | 與 `advanced` 相同 | 預設分支 |
+
+### 如何選擇？
+
+#### 選擇 `basic` 分支，如果您：
+
+- 只有 **1 個 Instance Store** 裝置
+- 想要 **簡單、快速** 部署
+- 不需要 RAID 0 或 XFS
+- 偏好 **單一腳本檔案**，易於閱讀與修改
+- 需要 **郵件通知** 功能
+
+```bash
+# 切換到 basic 分支
+git checkout basic
+
+# 或直接下載
+curl -O https://raw.githubusercontent.com/albertyu-0703/Mounting-AWS-Instance-Store-on-Boot/basic/InstanceStore.sh
+```
+
+#### 選擇 `advanced` 分支（或 main），如果您：
+
+- 有 **多個 Instance Store** 裝置需要 RAID 0
+- 需要 **XFS 檔案系統** 支援
+- 想要 **外部配置檔** 管理設定
+- 需要 **命令列參數** 彈性控制
+- 部署於 **生產環境**，需要完整的服務管理
+- 使用 **Cloud-init** 或 **Terraform** 自動化部署
+
+```bash
+# 使用 main 分支 (預設)
+git clone https://github.com/albertyu-0703/Mounting-AWS-Instance-Store-on-Boot.git
+
+# 或切換到 advanced 分支
+git checkout advanced
+```
+
+### 功能比較表
+
+| 功能 | `basic` | `advanced` |
+|------|:-------:|:----------:|
+| 自動偵測 Instance Store | ✅ | ✅ |
+| 動態/靜態掛載點 | ✅ | ✅ |
+| IMDSv2 支援 | ✅ | ✅ |
+| 郵件通知 | ✅ | ✅ |
+| RAID 0 支援 | ❌ | ✅ |
+| XFS 檔案系統 | ❌ | ✅ |
+| 外部配置檔 | ❌ | ✅ |
+| 命令列參數 | ❌ | ✅ |
+| systemd 服務 | ❌ | ✅ |
+| 安裝/解除安裝腳本 | ❌ | ✅ |
+| Cloud-init 範例 | ❌ | ✅ |
+| Terraform 範例 | ❌ | ✅ |
+| 程式碼註解 | 繁體中文 | 繁體中文 |
+
+---
+
 ## 支援的作業系統
 
 本腳本支援以下 Linux 發行版：
@@ -159,7 +226,7 @@ done
 
 ```bash
 # 下載專案
-git clone https://github.com/your-repo/Mounting-AWS-Instance-Store-on-Boot.git
+git clone https://github.com/albertyu-0703/Mounting-AWS-Instance-Store-on-Boot.git
 cd Mounting-AWS-Instance-Store-on-Boot
 
 # 執行安裝
