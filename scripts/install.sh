@@ -55,7 +55,7 @@ install_dependencies() {
             apt-get update -qq
             apt-get install -y -qq mdadm nvme-cli curl
             ;;
-        amzn|rhel|centos|fedora)
+        amzn|rhel|centos|rocky|fedora)
             if command -v dnf &> /dev/null; then
                 dnf install -y -q mdadm nvme-cli curl
             else
@@ -73,6 +73,24 @@ create_directories() {
     echo -e "${GREEN}[INFO]${NC} 建立目錄結構..."
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$LOG_DIR"
+}
+
+# 檢查必要的來源檔案
+check_source_files() {
+    local required_files=(
+        "$PROJECT_DIR/scripts/mount-instance-store.sh"
+        "$PROJECT_DIR/config/mount-instance-store.conf"
+        "$PROJECT_DIR/systemd/instance-store-mount.service"
+    )
+
+    for f in "${required_files[@]}"; do
+        if [[ ! -f "$f" ]]; then
+            echo -e "${RED}[ERROR]${NC} 找不到必要檔案: $f"
+            echo "請確認從完整的專案目錄執行安裝腳本"
+            exit 1
+        fi
+    done
+    echo -e "${GREEN}[INFO]${NC} 來源檔案檢查通過"
 }
 
 # 安裝腳本
@@ -98,22 +116,8 @@ install_scripts() {
 install_systemd_service() {
     echo -e "${GREEN}[INFO]${NC} 安裝 systemd 服務..."
 
-    cat > "$SYSTEMD_DIR/instance-store-mount.service" << 'EOF'
-[Unit]
-Description=Mount AWS EC2 Instance Store
-After=local-fs.target
-Before=docker.service containerd.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/mount-instance-store
-RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    # 使用 repo 中的 systemd unit 檔案 (包含完整的重試、逾時等設定)
+    cp "$PROJECT_DIR/systemd/instance-store-mount.service" "$SYSTEMD_DIR/instance-store-mount.service"
 
     # 重新載入 systemd
     systemctl daemon-reload
@@ -173,6 +177,7 @@ show_install_info() {
 # 主程式
 main() {
     detect_os
+    check_source_files
     install_dependencies
     create_directories
     install_scripts

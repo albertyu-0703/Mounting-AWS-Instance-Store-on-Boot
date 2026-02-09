@@ -26,12 +26,8 @@ set -euo pipefail
 # 腳本所在目錄
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 載入配置檔
+# 預設配置檔路徑 (可透過 -c 參數覆蓋，載入在 parse_arguments 之後)
 CONFIG_FILE="${CONFIG_FILE:-/etc/instance-store-mount/mount-instance-store.conf}"
-if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE"
-fi
 
 # ============================================================
 # 預設配置值
@@ -91,6 +87,9 @@ SMTP_PASSWORD="${SMTP_PASSWORD:-}"
 
 # 執行完成後呼叫的腳本 (可選)
 POST_MOUNT_SCRIPT="${POST_MOUNT_SCRIPT:-}"
+
+# 模擬執行模式
+DRY_RUN="${DRY_RUN:-false}"
 
 # ============================================================
 # 全域變數
@@ -220,7 +219,8 @@ collect_instance_info() {
     INSTANCE_ID=$(get_instance_metadata "$token" "meta-data/instance-id")
     INSTANCE_TYPE=$(get_instance_metadata "$token" "meta-data/instance-type")
     AVAILABILITY_ZONE=$(get_instance_metadata "$token" "meta-data/placement/availability-zone")
-    REGION="${AVAILABILITY_ZONE%[a-z]}"
+    # 移除尾端所有小寫字母 (如 ap-northeast-1a -> ap-northeast-1)
+    REGION=$(echo "$AVAILABILITY_ZONE" | sed 's/[a-z]*$//')
 
     local identity_doc
     identity_doc=$(get_instance_metadata "$token" "dynamic/instance-identity/document")
@@ -297,6 +297,11 @@ detect_instance_stores() {
 unmount_existing() {
     log INFO "檢查並解除現有掛載..."
 
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log INFO "[DRY-RUN] 將解除現有掛載 (跳過實際操作)"
+        return 0
+    fi
+
     # 解除 RAID 裝置
     if [[ -b "$RAID_DEVICE" ]]; then
         if mount | grep -q "$RAID_DEVICE"; then
@@ -328,10 +333,12 @@ unmount_existing() {
         fi
     done
 
-    # 清除 RAID superblock
-    for dev in "${INSTANCE_STORE_DEVICES[@]}"; do
-        mdadm --zero-superblock "/dev/$dev" 2>/dev/null || true
-    done
+    # 僅在 RAID 模式下清除 superblock (避免 single 模式不必要的 mdadm 呼叫)
+    if [[ "$MOUNT_MODE" == "raid0" ]] && command -v mdadm &> /dev/null; then
+        for dev in "${INSTANCE_STORE_DEVICES[@]}"; do
+            mdadm --zero-superblock "/dev/$dev" 2>/dev/null || true
+        done
+    fi
 }
 
 format_device() {
@@ -340,22 +347,28 @@ format_device() {
 
     log INFO "格式化裝置 $device 為 $fs_type..."
 
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log INFO "[DRY-RUN] 將格式化 $device 為 $fs_type (跳過實際操作)"
+        return 0
+    fi
+
     # 選擇性清除裝置
     if [[ "$WIPE_DEVICE_BEFORE_FORMAT" == "true" ]]; then
         log INFO "清除裝置 $device..."
         wipefs -a "$device" 2>/dev/null || true
     fi
 
+    local mkfs_output
     case "$fs_type" in
         ext4)
-            if ! mkfs.ext4 -F $EXT4_FORMAT_OPTIONS "$device" 2>&1; then
-                log ERROR "格式化 $device 為 ext4 失敗"
+            if ! mkfs_output=$(mkfs.ext4 -F $EXT4_FORMAT_OPTIONS "$device" 2>&1); then
+                log ERROR "格式化 $device 為 ext4 失敗: $mkfs_output"
                 return 1
             fi
             ;;
         xfs)
-            if ! mkfs.xfs -f $XFS_FORMAT_OPTIONS "$device" 2>&1; then
-                log ERROR "格式化 $device 為 xfs 失敗"
+            if ! mkfs_output=$(mkfs.xfs -f $XFS_FORMAT_OPTIONS "$device" 2>&1); then
+                log ERROR "格式化 $device 為 xfs 失敗: $mkfs_output"
                 return 1
             fi
             ;;
@@ -365,6 +378,7 @@ format_device() {
             ;;
     esac
 
+    log DEBUG "mkfs 輸出: $mkfs_output"
     log INFO "裝置 $device 格式化完成"
     return 0
 }
@@ -435,7 +449,9 @@ mount_single_mode() {
         fi
 
         # 掛載
-        if mount -o "$MOUNT_OPTIONS" "$device" "$mount_point"; then
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log INFO "[DRY-RUN] 將掛載 $device 到 $mount_point (跳過實際操作)"
+        elif mount -o "$MOUNT_OPTIONS" "$device" "$mount_point"; then
             log INFO "成功掛載 $device 到 $mount_point"
 
             # 設定權限 (sticky bit，允許所有用戶寫入)
@@ -464,6 +480,13 @@ mount_raid0_mode() {
 
     # 建立 RAID 陣列
     log INFO "建立 RAID 0 陣列，包含 $INSTANCE_STORE_COUNT 個裝置..."
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log INFO "[DRY-RUN] 將建立 RAID 0: ${device_paths[*]} -> $RAID_DEVICE"
+        log INFO "[DRY-RUN] 將格式化 $RAID_DEVICE 為 $FILESYSTEM_TYPE"
+        log INFO "[DRY-RUN] 將掛載 $RAID_DEVICE 到 $RAID_MOUNT_POINT"
+        return 0
+    fi
 
     # 使用 yes 自動確認
     if ! yes | mdadm --create "$RAID_DEVICE" \
@@ -577,20 +600,25 @@ EOF
 
     # 發送郵件
     if command -v sendmail &> /dev/null; then
+        local mail_failed=false
         for recipient in $EMAIL_RECIPIENTS; do
+            local send_result=0
             if [[ -n "$SMTP_USER" ]] && [[ -n "$SMTP_PASSWORD" ]]; then
                 sendmail -f "$EMAIL_SENDER" -S "${SMTP_SERVER}:${SMTP_PORT}" \
                     -au "$SMTP_USER" -ap "$SMTP_PASSWORD" \
-                    "$recipient" < "$temp_mail_file" 2>/dev/null
+                    "$recipient" < "$temp_mail_file" 2>/dev/null || send_result=$?
             else
-                sendmail -f "$EMAIL_SENDER" "$recipient" < "$temp_mail_file" 2>/dev/null
+                sendmail -f "$EMAIL_SENDER" "$recipient" < "$temp_mail_file" 2>/dev/null || send_result=$?
+            fi
+
+            if [[ $send_result -ne 0 ]]; then
+                log WARN "郵件發送至 $recipient 失敗"
+                mail_failed=true
             fi
         done
 
-        if [[ $? -eq 0 ]]; then
-            log INFO "郵件通知已發送"
-        else
-            log WARN "郵件發送失敗"
+        if [[ "$mail_failed" == "false" ]]; then
+            log INFO "郵件通知已全部發送"
         fi
     else
         log WARN "sendmail 未安裝，跳過郵件通知"
@@ -693,6 +721,9 @@ main() {
     log INFO "AWS Instance Store 掛載腳本啟動"
     log INFO "版本: 5.0"
     log INFO "開始時間: $START_TIME"
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log WARN "模擬執行模式 (DRY-RUN) - 不會執行實際操作"
+    fi
     log INFO "=========================================="
 
     # 前置檢查
@@ -742,6 +773,15 @@ main() {
 }
 
 # 解析命令列參數
+parse_arguments "$@"
+
+# 載入配置檔 (在 parse_arguments 之後，讓 -c 參數能覆蓋預設路徑)
+if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
+# 命令列參數優先於配置檔，重新套用
 parse_arguments "$@"
 
 # 執行主程式

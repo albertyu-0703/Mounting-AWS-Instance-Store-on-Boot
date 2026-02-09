@@ -68,7 +68,12 @@ write_files:
           for dev in "${DEVICES[@]}"; do device_paths+=("/dev/$dev"); done
           yes | mdadm --create "$RAID_DEVICE" --level=0 --raid-devices=${#DEVICES[@]} "${device_paths[@]}"
 
-          mkfs.$FILESYSTEM_TYPE -F "$RAID_DEVICE"
+          # ext4 使用 -F，xfs 使用 -f
+          if [[ "$FILESYSTEM_TYPE" == "xfs" ]]; then
+              mkfs.xfs -f "$RAID_DEVICE"
+          else
+              mkfs.ext4 -F "$RAID_DEVICE"
+          fi
           mkdir -p "$MOUNT_POINT"
           mount -o defaults,noatime "$RAID_DEVICE" "$MOUNT_POINT"
           chmod 1777 "$MOUNT_POINT"
@@ -80,7 +85,12 @@ write_files:
               DEVICE="/dev/$dev"
 
               mkdir -p "$MOUNT_POINT"
-              mkfs.$FILESYSTEM_TYPE -F "$DEVICE" 2>/dev/null || true
+              # ext4 使用 -F，xfs 使用 -f
+              if [[ "$FILESYSTEM_TYPE" == "xfs" ]]; then
+                  mkfs.xfs -f "$DEVICE" 2>/dev/null || true
+              else
+                  mkfs.ext4 -F "$DEVICE" 2>/dev/null || true
+              fi
               mount -o defaults,noatime "$DEVICE" "$MOUNT_POINT"
               chmod 1777 "$MOUNT_POINT"
               log "INFO: Mounted $DEVICE at $MOUNT_POINT"

@@ -47,12 +47,28 @@ variable "mount_mode" {
   description = "Mount mode: single or raid0"
   type        = string
   default     = "single"
+
+  validation {
+    condition     = contains(["single", "raid0"], var.mount_mode)
+    error_message = "mount_mode 只能是 \"single\" 或 \"raid0\""
+  }
 }
 
 variable "filesystem_type" {
   description = "Filesystem type: ext4 or xfs"
   type        = string
   default     = "ext4"
+
+  validation {
+    condition     = contains(["ext4", "xfs"], var.filesystem_type)
+    error_message = "filesystem_type 只能是 \"ext4\" 或 \"xfs\""
+  }
+}
+
+variable "allowed_ssh_cidr" {
+  description = "允許 SSH 連線的 CIDR 範圍 (建議限制為您的 IP)"
+  type        = string
+  default     = "0.0.0.0/0"
 }
 
 # ============================================================
@@ -162,8 +178,8 @@ resource "aws_security_group" "instance_store_demo" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "SSH"
+    cidr_blocks = [var.allowed_ssh_cidr]
+    description = "SSH (建議限制為特定 IP 範圍)"
   }
 
   egress {
@@ -187,7 +203,15 @@ resource "aws_instance" "with_instance_store" {
   vpc_security_group_ids      = [aws_security_group.instance_store_demo.id]
   associate_public_ip_address = true
 
-  user_data = local.user_data
+  user_data                   = local.user_data
+  user_data_replace_on_change = true
+
+  # 強制使用 IMDSv2 (AWS 安全最佳實踐)
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+  }
 
   # Instance Store 需要設定 ephemeral block device mappings
   # 對於 NVMe Instance Store，這通常會自動處理
