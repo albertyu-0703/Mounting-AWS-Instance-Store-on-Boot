@@ -47,12 +47,28 @@ variable "mount_mode" {
   description = "Mount mode: single or raid0"
   type        = string
   default     = "single"
+
+  validation {
+    condition     = contains(["single", "raid0"], var.mount_mode)
+    error_message = "mount_mode 只能是 \"single\" 或 \"raid0\""
+  }
 }
 
 variable "filesystem_type" {
   description = "Filesystem type: ext4 or xfs"
   type        = string
   default     = "ext4"
+
+  validation {
+    condition     = contains(["ext4", "xfs"], var.filesystem_type)
+    error_message = "filesystem_type 只能是 \"ext4\" 或 \"xfs\""
+  }
+}
+
+variable "allowed_ssh_cidr" {
+  description = "允許 SSH 連線的 CIDR 範圍 (建議限制為您的 IP)"
+  type        = string
+  default     = "0.0.0.0/0"
 }
 
 # ============================================================
@@ -127,18 +143,26 @@ locals {
         done
 
         yes | mdadm --create "$RAID_DEV" --level=0 --raid-devices=$COUNT "$${DEVS[@]}"
-        mkfs.$FS_TYPE -f "$RAID_DEV" 2>/dev/null || mkfs.$FS_TYPE -F "$RAID_DEV"
+        if [[ "$FS_TYPE" == "xfs" ]]; then
+            mkfs.xfs -f "$RAID_DEV"
+        else
+            mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "$RAID_DEV"
+        fi
         mkdir -p "$MOUNT_PT"
-        mount -o defaults,noatime "$RAID_DEV" "$MOUNT_PT"
+        mount -o defaults,noatime,nodiratime "$RAID_DEV" "$MOUNT_PT"
         chmod 1777 "$MOUNT_PT"
         log "INFO: RAID 0 mounted at $MOUNT_PT"
     else
         idx=1
         for d in "$${DEVS[@]}"; do
             MOUNT_PT="/mnt/instance_store$idx"
-            mkfs.$FS_TYPE -f "$d" 2>/dev/null || mkfs.$FS_TYPE -F "$d"
+            if [[ "$FS_TYPE" == "xfs" ]]; then
+                mkfs.xfs -f "$d"
+            else
+                mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "$d"
+            fi
             mkdir -p "$MOUNT_PT"
-            mount -o defaults,noatime "$d" "$MOUNT_PT"
+            mount -o defaults,noatime,nodiratime "$d" "$MOUNT_PT"
             chmod 1777 "$MOUNT_PT"
             log "INFO: Mounted $d at $MOUNT_PT"
             ((idx++))
@@ -162,8 +186,8 @@ resource "aws_security_group" "instance_store_demo" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "SSH"
+    cidr_blocks = [var.allowed_ssh_cidr]
+    description = "SSH (建議限制為特定 IP 範圍)"
   }
 
   egress {
@@ -187,7 +211,15 @@ resource "aws_instance" "with_instance_store" {
   vpc_security_group_ids      = [aws_security_group.instance_store_demo.id]
   associate_public_ip_address = true
 
-  user_data = local.user_data
+  user_data                   = local.user_data
+  user_data_replace_on_change = true
+
+  # 強制使用 IMDSv2 (AWS 安全最佳實踐)
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+  }
 
   # Instance Store 需要設定 ephemeral block device mappings
   # 對於 NVMe Instance Store，這通常會自動處理

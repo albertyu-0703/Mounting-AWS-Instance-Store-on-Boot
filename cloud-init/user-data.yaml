@@ -68,9 +68,14 @@ write_files:
           for dev in "${DEVICES[@]}"; do device_paths+=("/dev/$dev"); done
           yes | mdadm --create "$RAID_DEVICE" --level=0 --raid-devices=${#DEVICES[@]} "${device_paths[@]}"
 
-          mkfs.$FILESYSTEM_TYPE -F "$RAID_DEVICE"
+          # ext4 使用 -F + lazy init，xfs 使用 -f
+          if [[ "$FILESYSTEM_TYPE" == "xfs" ]]; then
+              mkfs.xfs -f "$RAID_DEVICE"
+          else
+              mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "$RAID_DEVICE"
+          fi
           mkdir -p "$MOUNT_POINT"
-          mount -o defaults,noatime "$RAID_DEVICE" "$MOUNT_POINT"
+          mount -o defaults,noatime,nodiratime "$RAID_DEVICE" "$MOUNT_POINT"
           chmod 1777 "$MOUNT_POINT"
           log "INFO: RAID 0 mounted at $MOUNT_POINT"
       else
@@ -80,8 +85,13 @@ write_files:
               DEVICE="/dev/$dev"
 
               mkdir -p "$MOUNT_POINT"
-              mkfs.$FILESYSTEM_TYPE -F "$DEVICE" 2>/dev/null || true
-              mount -o defaults,noatime "$DEVICE" "$MOUNT_POINT"
+              # ext4 使用 -F + lazy init，xfs 使用 -f
+              if [[ "$FILESYSTEM_TYPE" == "xfs" ]]; then
+                  mkfs.xfs -f "$DEVICE" 2>/dev/null || true
+              else
+                  mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "$DEVICE" 2>/dev/null || true
+              fi
+              mount -o defaults,noatime,nodiratime "$DEVICE" "$MOUNT_POINT"
               chmod 1777 "$MOUNT_POINT"
               log "INFO: Mounted $DEVICE at $MOUNT_POINT"
               ((idx++))
@@ -97,15 +107,17 @@ write_files:
     content: |
       [Unit]
       Description=Mount AWS EC2 Instance Store
-      After=local-fs.target
+      After=local-fs.target network-online.target
       Before=docker.service containerd.service
+      Wants=network-online.target
 
       [Service]
       Type=oneshot
-      ExecStart=/usr/local/bin/mount-instance-store
       RemainAfterExit=yes
       Environment="MOUNT_MODE=single"
       Environment="FILESYSTEM_TYPE=ext4"
+      ExecStart=/bin/bash -c 'for attempt in 1 2 3; do echo "Mount attempt $attempt/3..."; /usr/local/bin/mount-instance-store && exit 0; sleep 10; done; exit 1'
+      TimeoutStartSec=300
 
       [Install]
       WantedBy=multi-user.target

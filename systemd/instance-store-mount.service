@@ -7,16 +7,21 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/mount-instance-store
 RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal
 
-# 重試設定
-Restart=on-failure
-RestartSec=10
-StartLimitBurst=3
-StartLimitInterval=60
+# 重試邏輯: 最多嘗試 3 次，每次間隔 10 秒
+# oneshot 服務不支援 Restart=on-failure，因此使用 bash 迴圈實現重試
+ExecStart=/bin/bash -c '\
+    for attempt in 1 2 3; do \
+        echo "Instance Store 掛載嘗試 $attempt/3..."; \
+        /usr/local/bin/mount-instance-store && exit 0; \
+        echo "嘗試 $attempt 失敗，等待 10 秒後重試..."; \
+        sleep 10; \
+    done; \
+    echo "所有重試均失敗"; \
+    exit 1'
 
 # 超時設定
 TimeoutStartSec=300

@@ -65,6 +65,7 @@ git checkout advanced
 | 安裝/解除安裝腳本 | ❌ | ✅ |
 | Cloud-init 範例 | ❌ | ✅ |
 | Terraform 範例 | ❌ | ✅ |
+| Dry-run 模擬執行 | ❌ | ✅ |
 | 程式碼註解 | 繁體中文 | 繁體中文 |
 
 ---
@@ -218,7 +219,9 @@ done
 - **IMDSv2 支援** - 相容最新的 EC2 Metadata Service
 - **開機自動執行** - 透過 systemd 服務自動掛載
 - **郵件通知** - 可選的執行結果通知
+- **模擬執行 (Dry-run)** - 預覽操作而不實際執行
 - **Cloud-init 支援** - 提供 user-data 配置範例
+- **Terraform 支援** - 提供 IaC 自動化部署範例
 
 ## 快速開始
 
@@ -257,6 +260,19 @@ sudo systemctl enable instance-store-mount.service
 sudo systemctl start instance-store-mount.service
 ```
 
+### 解除安裝
+
+```bash
+cd Mounting-AWS-Instance-Store-on-Boot
+sudo bash scripts/uninstall.sh
+```
+
+解除安裝腳本會引導您：
+- 停用並移除 systemd 服務與 udev 規則
+- 選擇是否保留設定檔
+- 選擇是否解除目前的 Instance Store 掛載
+- 選擇是否移除日誌檔案
+
 ## 使用方式
 
 ### 命令列選項
@@ -282,6 +298,12 @@ sudo mount-instance-store -d
 
 # 使用靜態掛載點
 sudo mount-instance-store -s
+
+# 模擬執行 (不實際掛載，僅顯示將執行的操作)
+sudo mount-instance-store --dry-run
+
+# 組合使用
+sudo mount-instance-store -m raid0 -f xfs --dry-run
 ```
 
 ### 服務管理
@@ -321,9 +343,46 @@ FILESYSTEM_TYPE="ext4"
 # RAID 設定
 RAID_MOUNT_POINT="/mnt/instance_store"
 RAID_CHUNK_SIZE="256"
+
+# 模擬執行 (不實際操作)
+DRY_RUN="false"
 ```
 
 完整配置說明請參考 `config/mount-instance-store.conf`。
+
+## Terraform 部署
+
+使用 `terraform/main.tf` 可快速部署含 Instance Store 自動掛載的 EC2：
+
+```bash
+cd terraform
+
+# 初始化
+terraform init
+
+# 預覽 (必須指定 SSH Key Pair 名稱)
+terraform plan -var="key_name=my-key"
+
+# 部署
+terraform apply -var="key_name=my-key"
+
+# 自訂設定
+terraform apply \
+  -var="key_name=my-key" \
+  -var="instance_type=i3.xlarge" \
+  -var="mount_mode=raid0" \
+  -var="filesystem_type=xfs" \
+  -var="allowed_ssh_cidr=203.0.113.0/24"
+```
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `aws_region` | `us-west-2` | AWS 區域 |
+| `instance_type` | `c5d.large` | EC2 Instance 類型 |
+| `key_name` | (必填) | SSH Key Pair 名稱 |
+| `mount_mode` | `single` | 掛載模式: `single` 或 `raid0` |
+| `filesystem_type` | `ext4` | 檔案系統: `ext4` 或 `xfs` |
+| `allowed_ssh_cidr` | `0.0.0.0/0` | 允許 SSH 的 CIDR (建議限制為您的 IP) |
 
 ## 支援的 EC2 Instance 類型
 
@@ -439,6 +498,7 @@ sudo umount /mnt/instance_store1
 
 ## 版本歷史
 
+- **v5.1** - 修復多項 bug：實作 dry-run、修復 --config 載入順序、修復 systemd oneshot 重試機制、修復 cloud-init mkfs 參數、Terraform 加入 IMDSv2 與變數驗證、uninstall 加入掛載清理
 - **v5.0** - 整合所有版本功能，新增命令列選項、模組化配置
 - **v4.0** - 新增郵件通知功能
 - **v3.0** - 新增解除現有掛載、固定掛載點陣列

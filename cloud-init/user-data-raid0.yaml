@@ -44,46 +44,61 @@ write_files:
 
       [[ $COUNT -eq 0 ]] && { log "WARN: No Instance Store"; exit 0; }
 
-      # 停止現有 RAID
-      mdadm --stop "$RAID_DEV" 2>/dev/null || true
-      for d in "${DEVS[@]}"; do
-          mdadm --zero-superblock "$d" 2>/dev/null || true
-          wipefs -a "$d" 2>/dev/null || true
-      done
+      if [[ $COUNT -eq 1 ]]; then
+          # 只有 1 個裝置，直接掛載不建立 RAID
+          log "INFO: Only 1 device found, mounting directly (skipping RAID)..."
+          wipefs -a "${DEVS[0]}" 2>/dev/null || true
+          mkfs.$FS_TYPE -f -K "${DEVS[0]}"
+          mkdir -p "$MOUNT_PT"
+          mount -o defaults,noatime,nodiratime "${DEVS[0]}" "$MOUNT_PT"
+          chmod 1777 "$MOUNT_PT"
+          log "INFO: Mounted ${DEVS[0]} at $MOUNT_PT"
+          df -h "$MOUNT_PT" | tee -a "$LOG"
+      else
+          # 多個裝置，建立 RAID 0
+          # 停止現有 RAID
+          mdadm --stop "$RAID_DEV" 2>/dev/null || true
+          for d in "${DEVS[@]}"; do
+              mdadm --zero-superblock "$d" 2>/dev/null || true
+              wipefs -a "$d" 2>/dev/null || true
+          done
 
-      # 建立 RAID 0
-      log "INFO: Creating RAID 0 with $COUNT devices..."
-      yes | mdadm --create "$RAID_DEV" \
-          --level=0 \
-          --raid-devices=$COUNT \
-          --chunk=256 \
-          "${DEVS[@]}"
+          # 建立 RAID 0
+          log "INFO: Creating RAID 0 with $COUNT devices..."
+          yes | mdadm --create "$RAID_DEV" \
+              --level=0 \
+              --raid-devices=$COUNT \
+              --chunk=256 \
+              "${DEVS[@]}"
 
-      # 格式化
-      log "INFO: Formatting with $FS_TYPE..."
-      mkfs.$FS_TYPE -f -K "$RAID_DEV"
+          # 格式化
+          log "INFO: Formatting with $FS_TYPE..."
+          mkfs.$FS_TYPE -f -K "$RAID_DEV"
 
-      # 掛載
-      mkdir -p "$MOUNT_PT"
-      mount -o defaults,noatime,nodiratime "$RAID_DEV" "$MOUNT_PT"
-      chmod 1777 "$MOUNT_PT"
+          # 掛載
+          mkdir -p "$MOUNT_PT"
+          mount -o defaults,noatime,nodiratime "$RAID_DEV" "$MOUNT_PT"
+          chmod 1777 "$MOUNT_PT"
 
-      log "INFO: RAID 0 mounted at $MOUNT_PT"
-      df -h "$MOUNT_PT" | tee -a "$LOG"
-      mdadm --detail "$RAID_DEV" >> "$LOG"
+          log "INFO: RAID 0 mounted at $MOUNT_PT"
+          df -h "$MOUNT_PT" | tee -a "$LOG"
+          mdadm --detail "$RAID_DEV" >> "$LOG"
+      fi
 
   - path: /etc/systemd/system/instance-store-mount.service
     permissions: '0644'
     content: |
       [Unit]
       Description=Mount Instance Store RAID 0
-      After=local-fs.target
+      After=local-fs.target network-online.target
       Before=docker.service
+      Wants=network-online.target
 
       [Service]
       Type=oneshot
-      ExecStart=/usr/local/bin/mount-instance-store
       RemainAfterExit=yes
+      ExecStart=/bin/bash -c 'for attempt in 1 2 3; do echo "Mount attempt $attempt/3..."; /usr/local/bin/mount-instance-store && exit 0; sleep 10; done; exit 1'
+      TimeoutStartSec=300
 
       [Install]
       WantedBy=multi-user.target
