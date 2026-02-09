@@ -143,18 +143,26 @@ locals {
         done
 
         yes | mdadm --create "$RAID_DEV" --level=0 --raid-devices=$COUNT "$${DEVS[@]}"
-        mkfs.$FS_TYPE -f "$RAID_DEV" 2>/dev/null || mkfs.$FS_TYPE -F "$RAID_DEV"
+        if [[ "$FS_TYPE" == "xfs" ]]; then
+            mkfs.xfs -f "$RAID_DEV"
+        else
+            mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "$RAID_DEV"
+        fi
         mkdir -p "$MOUNT_PT"
-        mount -o defaults,noatime "$RAID_DEV" "$MOUNT_PT"
+        mount -o defaults,noatime,nodiratime "$RAID_DEV" "$MOUNT_PT"
         chmod 1777 "$MOUNT_PT"
         log "INFO: RAID 0 mounted at $MOUNT_PT"
     else
         idx=1
         for d in "$${DEVS[@]}"; do
             MOUNT_PT="/mnt/instance_store$idx"
-            mkfs.$FS_TYPE -f "$d" 2>/dev/null || mkfs.$FS_TYPE -F "$d"
+            if [[ "$FS_TYPE" == "xfs" ]]; then
+                mkfs.xfs -f "$d"
+            else
+                mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "$d"
+            fi
             mkdir -p "$MOUNT_PT"
-            mount -o defaults,noatime "$d" "$MOUNT_PT"
+            mount -o defaults,noatime,nodiratime "$d" "$MOUNT_PT"
             chmod 1777 "$MOUNT_PT"
             log "INFO: Mounted $d at $MOUNT_PT"
             ((idx++))

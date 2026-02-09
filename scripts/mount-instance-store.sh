@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # AWS EC2 Instance Store Auto-Mount Script
-# Version: 5.0
+# Version: 5.1
 # Author: Albert Yu
 # Description: 自動偵測並掛載 EC2 Instance Store (NVMe SSD)
 #              支援單獨掛載、RAID 0 模式、動態/靜態掛載點
@@ -719,7 +719,7 @@ main() {
 
     log INFO "=========================================="
     log INFO "AWS Instance Store 掛載腳本啟動"
-    log INFO "版本: 5.0"
+    log INFO "版本: 5.1"
     log INFO "開始時間: $START_TIME"
     if [[ "$DRY_RUN" == "true" ]]; then
         log WARN "模擬執行模式 (DRY-RUN) - 不會執行實際操作"

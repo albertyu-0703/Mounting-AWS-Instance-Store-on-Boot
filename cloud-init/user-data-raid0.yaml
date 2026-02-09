@@ -90,13 +90,15 @@ write_files:
     content: |
       [Unit]
       Description=Mount Instance Store RAID 0
-      After=local-fs.target
+      After=local-fs.target network-online.target
       Before=docker.service
+      Wants=network-online.target
 
       [Service]
       Type=oneshot
-      ExecStart=/usr/local/bin/mount-instance-store
       RemainAfterExit=yes
+      ExecStart=/bin/bash -c 'for attempt in 1 2 3; do echo "Mount attempt $attempt/3..."; /usr/local/bin/mount-instance-store && exit 0; sleep 10; done; exit 1'
+      TimeoutStartSec=300
 
       [Install]
       WantedBy=multi-user.target
